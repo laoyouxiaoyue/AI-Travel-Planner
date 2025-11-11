@@ -1,0 +1,88 @@
+# Git相关
+.git
+.gitignore
+.gitattributes
+
+# 文档
+*.md
+docs/
+README.md
+
+# 开发文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 配置文件（不打包到镜像，运行时通过挂载提供）
+config.yaml
+config.yml
+!.dockerignore
+
+# 测试文件
+*_test.go
+test/
+tests/
+
+# 源代码文件（不需要，只使用编译后的二进制文件）
+*.go
+go.mod
+go.sum
+internal/
+main.go
+
+# 构建产物（但允许编译后的二进制文件）
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+ai-travel-planner
+*.test
+*.out
+!ai-travel-planner-linux
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.log
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 脚本文件（不需要在镜像中）
+scripts/
+*.sh
+*.bat
+
+# Docker相关（避免递归复制，但允许 Dockerfile 和配置文件示例）
+docker-compose*.yml
+.dockerignore
+!Dockerfile
+!config.yaml.example
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# 其他
+.DS_Store
+Thumbs.db
+*.bak
+*.swp
+
+# 编译缓存
+.cache/
+
+# 可执行文件（已经在构建阶段生成）
+bin/
+dist/
+
+# 配置文件（通过环境变量提供）
+nginx.conf
+Makefile

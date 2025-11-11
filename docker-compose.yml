@@ -2,57 +2,75 @@ version: '3.8'
 
 services:
   ai-travel-planner:
-    build: .
+    # 使用已构建的镜像（使用 docker-build.bat 或 docker-build.sh 构建）
+    image: ai-travel-planner:latest
+    # 如果需要重新构建，请先运行: docker-build.bat (Windows) 或 ./docker-build.sh (Linux/Mac)
+    # 或者取消下面的注释来使用 build:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    container_name: ai-travel-planner
     ports:
-      - "8080:8080"
-    environment:
-      - GIN_MODE=release
-      - PORT=8080
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - JWT_SECRET=${JWT_SECRET}
-      - XUNFEI_APP_ID=${XUNFEI_APP_ID}
-      - XUNFEI_API_KEY=${XUNFEI_API_KEY}
-      - XUNFEI_API_SECRET=${XUNFEI_API_SECRET}
-      - AMAP_API_KEY=${AMAP_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - "9090:9090"
+    volumes:
+      # 挂载配置文件（可以在宿主机修改配置）
+      - ./config.yaml:/app/config.yaml:ro
+    # 可选：通过环境变量指定配置文件路径
+    # environment:
+    #   - CONFIG_PATH=/app/config.yaml
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9090/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - ai-travel-network
 
   # 可选：添加Redis缓存
   redis:
     image: redis:7-alpine
+    container_name: ai-travel-redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    networks:
+      - ai-travel-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   # 可选：添加Nginx反向代理
   nginx:
     image: nginx:alpine
+    container_name: ai-travel-nginx
     ports:
-      - "80:80"
-      - "443:443"
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - ai-travel-planner
     restart: unless-stopped
+    networks:
+      - ai-travel-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-travel-network:
+    driver: bridge
 
 volumes:
   redis_data:
-
-
-
-
-
+    driver: local

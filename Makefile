@@ -78,7 +78,7 @@ docker-build:
 
 docker-run:
 	@echo "🐳 运行Docker容器..."
-	docker run -p 8080:8080 --env-file .env ai-travel-planner
+	docker run -p 9090:9090 -v ./config.yaml:/app/config.yaml:ro ai-travel-planner
 
 docker-compose-up:
 	@echo "🐳 使用Docker Compose启动服务..."
@@ -145,6 +145,10 @@ check: fmt lint test security
 release: clean check build
 	@echo "🎉 发布准备完成"
 	@echo "构建文件: ai-travel-planner"
+
+
+
+
 
 
 

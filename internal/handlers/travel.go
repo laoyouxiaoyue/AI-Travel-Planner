@@ -242,15 +242,39 @@ func (h *TravelHandler) GetExpenses(c *gin.Context) {
 
 // CreateExpense 创建费用记录
 func (h *TravelHandler) CreateExpense(c *gin.Context) {
-	var expense models.Expense
-	if err := c.ShouldBindJSON(&expense); err != nil {
+	var req struct {
+		PlanID      string  `json:"plan_id" binding:"required"`
+		Category    string  `json:"category" binding:"required"`
+		Description string  `json:"description" binding:"required"`
+		Amount      float64 `json:"amount" binding:"required"`
+		Currency    string  `json:"currency"`
+		Date        string  `json:"date" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	expense.ID = uuid.New().String()
-	expense.CreatedAt = time.Now()
-	expense.UpdatedAt = time.Now()
+	parsedDate, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
+		return
+	}
+
+	expense := models.Expense{
+		ID:          uuid.New().String(),
+		PlanID:      req.PlanID,
+		Category:    req.Category,
+		Description: req.Description,
+		Amount:      req.Amount,
+		Currency:    req.Currency,
+		Date:        parsedDate,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if expense.Currency == "" {
+		expense.Currency = "CNY"
+	}
 
 	if err := h.travelService.CreateExpense(&expense); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create expense"})
@@ -258,4 +282,60 @@ func (h *TravelHandler) CreateExpense(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"expense": expense})
+}
+
+// UpdateExpense 更新费用记录
+func (h *TravelHandler) UpdateExpense(c *gin.Context) {
+	id := c.Param("id")
+	expense, err := h.travelService.GetExpense(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "expense not found"})
+		return
+	}
+
+	var req struct {
+		PlanID      string  `json:"plan_id" binding:"required"`
+		Category    string  `json:"category" binding:"required"`
+		Description string  `json:"description" binding:"required"`
+		Amount      float64 `json:"amount" binding:"required"`
+		Currency    string  `json:"currency"`
+		Date        string  `json:"date" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	parsedDate, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format, expected YYYY-MM-DD"})
+		return
+	}
+
+	expense.PlanID = req.PlanID
+	expense.Category = req.Category
+	expense.Description = req.Description
+	expense.Amount = req.Amount
+	expense.Currency = req.Currency
+	if expense.Currency == "" {
+		expense.Currency = "CNY"
+	}
+	expense.Date = parsedDate
+	expense.UpdatedAt = time.Now()
+
+	if err := h.travelService.UpdateExpense(expense); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update expense"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"expense": expense})
+}
+
+// DeleteExpense 删除费用记录
+func (h *TravelHandler) DeleteExpense(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.travelService.DeleteExpense(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "expense not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Expense deleted"})
 }

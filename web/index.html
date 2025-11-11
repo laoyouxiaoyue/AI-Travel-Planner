@@ -19,6 +19,7 @@
                 <div class="nav-menu" id="navMenu">
                     <a href="#home" class="nav-link active">首页</a>
                     <a href="#plans" class="nav-link">我的行程</a>
+                    <a href="#map" class="nav-link">地图导航</a>
                     <a href="#expenses" class="nav-link">费用管理</a>
                     <a href="#profile" class="nav-link">个人中心</a>
                     <a href="#settings" class="nav-link" style="display: none;" id="settingsNavLink">设置</a>
@@ -51,11 +52,6 @@
                             <i class="fas fa-robot"></i>
                             <h3>AI规划</h3>
                             <p>智能生成个性化行程</p>
-                        </div>
-                        <div class="feature">
-                            <i class="fas fa-map-marked-alt"></i>
-                            <h3>地图导航</h3>
-                            <p>实时地图和路线规划</p>
                         </div>
                         <div class="feature">
                             <i class="fas fa-calculator"></i>
@@ -128,6 +124,67 @@
                 </div>
             </section>
 
+            <!-- 地图导航 -->
+            <section id="map" class="page">
+                <div class="page-header">
+                    <h2>地图导航</h2>
+                </div>
+                <div class="map-container">
+                    <div class="map-controls">
+                        <div class="input-group">
+                            <label>起点</label>
+                            <input type="text" id="mapOrigin" placeholder="请输入起点地址或点击地图选择">
+                            <button id="mapOriginGeocode" class="btn btn-small btn-outline">搜索</button>
+                        </div>
+                        <div class="input-group">
+                            <label>终点</label>
+                            <input type="text" id="mapDestination" placeholder="请输入终点地址或点击地图选择">
+                            <button id="mapDestinationGeocode" class="btn btn-small btn-outline">搜索</button>
+                        </div>
+                        <div class="input-group">
+                            <label>搜索地点</label>
+                            <input type="text" id="mapSearchKeyword" placeholder="搜索地点、餐厅、酒店等">
+                            <button id="mapSearchBtn" class="btn btn-small btn-primary">搜索</button>
+                        </div>
+                        <div class="map-route-controls">
+                            <label>导航方式：</label>
+                            <button class="btn btn-small btn-outline active" data-mode="driving">
+                                <i class="fas fa-car"></i> 驾车
+                            </button>
+                            <button class="btn btn-small btn-outline" data-mode="walking">
+                                <i class="fas fa-walking"></i> 步行
+                            </button>
+                            <button class="btn btn-small btn-outline" data-mode="transit">
+                                <i class="fas fa-bus"></i> 公交
+                            </button>
+                            <button id="mapRouteBtn" class="btn btn-small btn-primary">
+                                <i class="fas fa-route"></i> 规划路线
+                            </button>
+                            <button id="mapClearBtn" class="btn btn-small btn-outline">
+                                <i class="fas fa-eraser"></i> 清除
+                            </button>
+                        </div>
+                    </div>
+                    <div id="mapContainer" class="map-view">
+                        <div id="mapLoading" class="map-loading">
+                            <div class="loading-spinner"></div>
+                            <p>正在加载地图...</p>
+                        </div>
+                        <div id="mapError" class="map-error" style="display: none;">
+                            <p>地图加载失败</p>
+                            <p class="map-error-hint">请检查API Key配置或网络连接</p>
+                        </div>
+                    </div>
+                    <div id="mapInfo" class="map-info">
+                        <div id="mapRouteInfo" class="route-info" style="display: none;">
+                            <h4>路线信息</h4>
+                            <div id="mapRouteDetails"></div>
+                        </div>
+                        <div id="mapPOIList" class="poi-list"></div>
+                    </div>
+                </div>
+            </section>
+
             <!-- 费用管理 -->
             <section id="expenses" class="page">
                 <div class="page-header">
@@ -136,6 +193,14 @@
                         <i class="fas fa-plus"></i>
                         添加费用
                     </button>
+                    <button id="expenseVoiceBtn" class="btn btn-outline">
+                        <i class="fas fa-microphone"></i>
+                        语音记账
+                    </button>
+                </div>
+                <div class="input-group" style="max-width:420px;margin-bottom:1rem;">
+                    <label>选择行程</label>
+                    <select id="expensePlanSelect"></select>
                 </div>
                 <div class="expense-summary">
                     <div class="summary-card">
@@ -228,6 +293,33 @@
                             
                             <div id="apiKeyStatus" class="api-key-status"></div>
                         </div>
+
+                        <div class="settings-section" style="margin-top: 2rem;">
+                            <h3><i class="fas fa-map-marked-alt"></i> 高德地图API配置</h3>
+                            <p class="settings-description">配置您的高德地图API密钥以使用地图导航功能</p>
+                            
+                            <div class="input-group">
+                                <label for="amapApiKey">高德地图API Key <span class="required">*</span></label>
+                                <input type="password" id="amapApiKey" placeholder="请输入高德地图API Key" class="api-key-input">
+                                <small class="input-hint">
+                                    <i class="fas fa-info-circle"></i>
+                                    获取方式：访问 <a href="https://console.amap.com/dev/key/app" target="_blank">高德开放平台</a> 创建应用，选择"Web端(JS API)"类型获取Key用于地图显示，或选择"Web服务"类型获取Key用于后端调用。建议同时创建两种类型的Key。
+                                </small>
+                            </div>
+                            
+                            <div class="settings-actions">
+                                <button id="saveAmapSettingsBtn" class="btn btn-primary">
+                                    <i class="fas fa-save"></i>
+                                    保存地图设置
+                                </button>
+                                <button id="testAmapApiKeyBtn" class="btn btn-outline">
+                                    <i class="fas fa-vial"></i>
+                                    测试地图Key
+                                </button>
+                            </div>
+                            
+                            <div id="amapApiKeyStatus" class="api-key-status"></div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -235,9 +327,9 @@
 
         <!-- 模态框 -->
         <div id="modal" class="modal">
-            <div class="modal-content">
+            <div class="modal-content" id="modalContent">
                 <span class="close">&times;</span>
-                <div id="modalBody"></div>
+                <div id="modalBody" class="modal-body-content"></div>
             </div>
         </div>
 

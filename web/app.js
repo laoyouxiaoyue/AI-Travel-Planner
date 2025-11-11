@@ -5,6 +5,13 @@ class TravelPlannerApp {
         this.apiBase = `${window.location.origin.replace(/\/$/, '')}/api/v1`;
         this.token = localStorage.getItem('token');
         this.currentUser = null;
+        this.currentEditingExpenseId = null;
+        this.expenseCache = [];
+        this.map = null;
+        this.mapMarkers = [];
+        this.mapRoute = null;
+        this.mapMode = 'driving';
+        this.amapLoaded = false;
         this.init();
     }
 
@@ -31,8 +38,25 @@ class TravelPlannerApp {
         // 模态框关闭
         document.querySelectorAll('.close').forEach(closeBtn => {
             closeBtn.addEventListener('click', (e) => {
-                e.target.closest('.modal').style.display = 'none';
+                const modal = e.target.closest('.modal');
+                const modalContent = modal.querySelector('.modal-content');
+                // 移除large类，以便其他模态框可以正常显示
+                if (modalContent) {
+                    modalContent.classList.remove('large');
+                }
+                modal.style.display = 'none';
             });
+        });
+        
+        // 点击模态框外部关闭
+        window.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                const modalContent = e.target.querySelector('.modal-content');
+                if (modalContent) {
+                    modalContent.classList.remove('large');
+                }
+                e.target.style.display = 'none';
+            }
         });
 
         // 认证标签页
@@ -62,9 +86,11 @@ class TravelPlannerApp {
 
         // 新建行程按钮
         document.getElementById('newPlanBtn').addEventListener('click', () => this.showPage('home'));
-
         // 添加费用按钮
         document.getElementById('addExpenseBtn').addEventListener('click', () => this.showAddExpenseModal());
+        // 语音记账
+        const expenseVoiceBtn = document.getElementById('expenseVoiceBtn');
+        if (expenseVoiceBtn) expenseVoiceBtn.addEventListener('click', () => this.startExpenseVoice());
 
         // 设置页面相关
         document.querySelectorAll('.profile-tabs .tab-btn').forEach(btn => {
@@ -76,12 +102,58 @@ class TravelPlannerApp {
 
         document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
         document.getElementById('testApiKeyBtn').addEventListener('click', () => this.testApiKey());
+        document.getElementById('saveAmapSettingsBtn').addEventListener('click', () => this.saveAmapSettings());
+        document.getElementById('testAmapApiKeyBtn').addEventListener('click', () => this.testAmapApiKey());
 
         // 为表单字段添加输入事件监听器，清除错误状态
         this.setupFormValidation();
         
         // 加载设置
         this.loadSettings();
+
+        // 地图相关事件监听
+        this.setupMapEventListeners();
+    }
+
+    setupMapEventListeners() {
+        // 地图搜索
+        const mapSearchBtn = document.getElementById('mapSearchBtn');
+        if (mapSearchBtn) {
+            mapSearchBtn.addEventListener('click', () => this.searchPOI());
+        }
+
+        // 地图路线规划
+        const mapRouteBtn = document.getElementById('mapRouteBtn');
+        if (mapRouteBtn) {
+            mapRouteBtn.addEventListener('click', () => this.planRoute());
+        }
+
+        // 清除地图
+        const mapClearBtn = document.getElementById('mapClearBtn');
+        if (mapClearBtn) {
+            mapClearBtn.addEventListener('click', () => this.clearMap());
+        }
+
+        // 导航方式切换
+        document.querySelectorAll('[data-mode]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                this.mapMode = e.target.dataset.mode;
+            });
+        });
+
+        // 起点搜索
+        const mapOriginGeocode = document.getElementById('mapOriginGeocode');
+        if (mapOriginGeocode) {
+            mapOriginGeocode.addEventListener('click', () => this.geocodeAddress('origin'));
+        }
+
+        // 终点搜索
+        const mapDestinationGeocode = document.getElementById('mapDestinationGeocode');
+        if (mapDestinationGeocode) {
+            mapDestinationGeocode.addEventListener('click', () => this.geocodeAddress('destination'));
+        }
     }
 
     setupFormValidation() {
@@ -171,6 +243,11 @@ class TravelPlannerApp {
             this.loadExpenses();
         } else if (pageId === 'profile') {
             this.loadSettings();
+        } else if (pageId === 'map') {
+            // 延迟初始化地图，确保页面已显示且容器可见
+            setTimeout(() => {
+                this.initMap();
+            }, 200);
         }
     }
 
@@ -401,24 +478,83 @@ class TravelPlannerApp {
 
     async loadExpenses() {
         if (!this.token) return;
-
         try {
-            // 这里应该根据当前选择的行程加载费用
-            // 简化实现，显示示例数据
-            this.displayExpenses([]);
+            // 加载行程选择
+            const plansRes = await this.apiCall('/travel/plans', 'GET');
+            const { plans = [] } = plansRes.ok ? await plansRes.json() : { plans: [] };
+            const select = document.getElementById('expensePlanSelect');
+            if (select) {
+                select.innerHTML = plans.map(p => `<option value="${p.id}">${p.title || p.destination}（${p.start_date}~${p.end_date}）</option>`).join('');
+                select.onchange = () => this.loadExpenses();
+            }
+            const planId = (select && select.value) || (plans[0]?.id || '');
+            if (!planId) {
+                this.displayExpenses([], { budget: 0 });
+                return;
+            }
+            // 获取选中行程详情以显示预算
+            const planRes = await this.apiCall(`/travel/plans/${planId}`, 'GET');
+            let budget = 0;
+            if (planRes.ok) {
+                const planData = await planRes.json();
+                budget = planData?.plan?.budget || 0;
+            }
+            // 获取费用列表
+            const res = await this.apiCall(`/travel/expenses?plan_id=${encodeURIComponent(planId)}`, 'GET');
+            if (!res.ok) {
+                this.displayExpenses([], { budget });
+                return;
+            }
+            const data = await res.json();
+            this.expenseCache = data.expenses || [];
+            this.displayExpenses(this.expenseCache, { budget });
         } catch (error) {
             console.error('加载费用失败:', error);
         }
     }
 
-    displayExpenses(expenses) {
+    displayExpenses(expenses, meta = { budget: 0 }) {
         const container = document.getElementById('expensesList');
-        if (expenses.length === 0) {
-            container.innerHTML = '<p>暂无费用记录，点击"添加费用"开始记录您的支出！</p>';
+        const total = (expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+        const budget = meta.budget || 0;
+        const remaining = Math.max(0, budget - total);
+        document.getElementById('totalExpense').textContent = `¥${total.toFixed(2)}`;
+        document.getElementById('budgetAmount').textContent = `¥${budget.toFixed(2)}`;
+        document.getElementById('remainingAmount').textContent = `¥${remaining.toFixed(2)}`;
+
+        if (!expenses || expenses.length === 0) {
+            container.innerHTML = '<p>暂无费用记录，点击“添加费用”开始记录您的支出！</p>';
             return;
         }
-
-        // 实现费用列表显示
+        container.innerHTML = expenses.map(e => `
+            <div class="expense-item">
+                <div class="expense-info">
+                    <div class="expense-title">${e.description || e.category || '费用'}</div>
+                    <div class="expense-meta">${e.category || '-'} · ${e.date ? new Date(e.date).toLocaleDateString() : ''} · ${e.currency || 'CNY'}</div>
+                </div>
+                <div class="expense-amount">
+                    ¥${Number(e.amount || 0).toFixed(2)}
+                    <button class="btn btn-outline btn-small" data-action="edit-expense" data-id="${e.id}"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-outline btn-small danger" data-action="delete-expense" data-id="${e.id}"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>
+        `).join('');
+        container.querySelectorAll('[data-action="edit-expense"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const expense = this.expenseCache.find(item => item.id === btn.dataset.id);
+                if (expense) {
+                    this.showAddExpenseModal(expense);
+                }
+            });
+        });
+        container.querySelectorAll('[data-action="delete-expense"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const expense = this.expenseCache.find(item => item.id === btn.dataset.id);
+                if (expense) {
+                    this.deleteExpense(expense);
+                }
+            });
+        });
     }
 
     toggleVoiceInput() {
@@ -714,9 +850,156 @@ class TravelPlannerApp {
         return Array.from(new Set(found));
     }
 
-    showAddExpenseModal() {
-        // 实现添加费用模态框
-        this.showMessage('添加费用功能开发中...', 'success');
+    showAddExpenseModal(expense = null) {
+        const planSelect = document.getElementById('expensePlanSelect');
+        const planId = planSelect ? planSelect.value : '';
+        if (!planId) {
+            this.showMessage('请先创建并选择一个行程', 'error');
+            return;
+        }
+        this.currentEditingExpenseId = expense ? expense.id : null;
+        const body = document.getElementById('modalBody');
+        body.innerHTML = `
+            <div class="input-group">
+                <label>类别</label>
+                <select id="expenseCategory">
+                    <option value="food">餐饮</option>
+                    <option value="transport">交通</option>
+                    <option value="accommodation">住宿</option>
+                    <option value="shopping">购物</option>
+                    <option value="other">其他</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label>描述</label>
+                <input type="text" id="expenseDescription" placeholder="如：午餐、打车、酒店">
+            </div>
+            <div class="input-group">
+                <label>金额（元）</label>
+                <input type="number" id="expenseAmount" step="0.01" min="0">
+            </div>
+            <div class="input-group">
+                <label>日期</label>
+                <input type="date" id="expenseDate" value="${new Date().toISOString().split('T')[0]}">
+            </div>
+            <div class="input-group">
+                <label>币种</label>
+                <input type="text" id="expenseCurrency" value="CNY">
+            </div>
+            <div class="settings-actions" style="justify-content:flex-end;">
+                <button id="expenseVoiceFill" class="btn btn-outline"><i class="fas fa-microphone"></i> 语音填表</button>
+                <button id="saveExpenseBtn" class="btn btn-primary"><i class="fas fa-save"></i> ${expense ? '更新' : '保存'}</button>
+            </div>
+        `;
+        document.getElementById('modal').style.display = 'block';
+        if (expense) {
+            const dateStr = expense.date ? new Date(expense.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+            document.getElementById('expenseCategory').value = expense.category || 'other';
+            document.getElementById('expenseDescription').value = expense.description || '';
+            document.getElementById('expenseAmount').value = typeof expense.amount === 'number' ? expense.amount : '';
+            document.getElementById('expenseDate').value = dateStr;
+            document.getElementById('expenseCurrency').value = expense.currency || 'CNY';
+        }
+        const saveBtn = document.getElementById('saveExpenseBtn');
+        saveBtn.onclick = async () => {
+            const category = document.getElementById('expenseCategory').value;
+            const description = document.getElementById('expenseDescription').value.trim();
+            const amountStr = document.getElementById('expenseAmount').value.trim();
+            const date = document.getElementById('expenseDate').value;
+            const currency = (document.getElementById('expenseCurrency').value || 'CNY').trim();
+            const amount = parseFloat(amountStr);
+            if (!description || !(amount > 0) || !date) {
+                this.showMessage('请填写描述、金额和日期', 'error');
+                return;
+            }
+            const payload = { plan_id: planId, category, description, amount, currency, date };
+            let res;
+            try {
+                if (this.currentEditingExpenseId) {
+                    res = await this.apiCall(`/travel/expenses/${this.currentEditingExpenseId}`, 'PUT', payload);
+                } else {
+                    res = await this.apiCall('/travel/expenses', 'POST', payload);
+                }
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    this.showMessage(err.error || '保存失败', 'error');
+                    return;
+                }
+                this.showMessage(this.currentEditingExpenseId ? '更新成功' : '保存成功', 'success');
+                document.getElementById('modal').style.display = 'none';
+                this.currentEditingExpenseId = null;
+                this.loadExpenses();
+            } catch (e) {
+                this.showMessage('网络错误，请重试', 'error');
+            }
+        };
+        document.getElementById('expenseVoiceFill').onclick = () => this.startExpenseVoice(true);
+    }
+
+    async deleteExpense(expense) {
+        if (!expense || !expense.id) return;
+        if (!confirm('确定删除该费用记录吗？')) return;
+        try {
+            const res = await this.apiCall(`/travel/expenses/${expense.id}`, 'DELETE');
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                this.showMessage(err.error || '删除失败', 'error');
+                return;
+            }
+            this.showMessage('已删除', 'success');
+            this.loadExpenses();
+        } catch (e) {
+            this.showMessage('网络错误，请重试', 'error');
+        }
+    }
+
+    // 语音记账：启动识别，并调用后端AI解析为费用字段
+    startExpenseVoice(fillModal = false) {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            this.showMessage('您的浏览器不支持语音识别功能', 'error');
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.onresult = async (event) => {
+            const transcript = event.results[0][0].transcript;
+            try {
+                const res = await this.apiCall('/voice/understand-expense', 'POST', {
+                    transcript,
+                    openai_api_key: this.getUserApiKey() || undefined,
+                    openai_base_url: (JSON.parse(localStorage.getItem('userSettings')||'{}').openaiBaseUrl) || undefined,
+                    openai_model: (JSON.parse(localStorage.getItem('userSettings')||'{}').openaiModel) || undefined,
+                });
+                let fields = {};
+                if (res.ok) {
+                    const data = await res.json();
+                    fields = data.fields || {};
+                }
+                this.fillExpenseFieldsFromAI(fields, fillModal);
+                this.showMessage('语音解析完成', 'success');
+            } catch (e) {
+                this.showMessage('语音解析失败', 'error');
+            }
+        };
+        recognition.onerror = () => this.showMessage('语音识别错误', 'error');
+        recognition.start();
+    }
+
+    fillExpenseFieldsFromAI(fields, fillModal) {
+        // fields: { category, description, amount, currency, date }
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+        if (fillModal) {
+            setVal('expenseCategory', fields.category);
+            setVal('expenseDescription', fields.description);
+            if (typeof fields.amount === 'number' && !Number.isNaN(fields.amount)) setVal('expenseAmount', String(fields.amount));
+            setVal('expenseCurrency', fields.currency || 'CNY');
+            setVal('expenseDate', fields.date);
+        } else {
+            // 未来可扩展：直接生成一条费用
+        }
     }
 
     viewPlan(planId) {
@@ -756,45 +1039,536 @@ class TravelPlannerApp {
         const plan = data.plan || {};
         const days = data.days || [];
         const actsByDay = data.activities_by_day || {};
+        const expenseSummary = data.expense_summary || {};
 
+        // 计算行程天数
+        const totalDays = days.length;
+        const startDate = plan.start_date ? new Date(plan.start_date) : null;
+        const endDate = plan.end_date ? new Date(plan.end_date) : null;
+        
+        // 计算总费用
+        const totalExpense = expenseSummary.total || 0;
+        const budget = plan.budget || 0;
+        const remaining = Math.max(0, budget - totalExpense);
+        const expensePercentage = budget > 0 ? (totalExpense / budget * 100).toFixed(1) : 0;
+
+        // 获取活动图标
+        const getActivityIcon = (type) => {
+            const iconMap = {
+                '餐饮': 'fa-utensils',
+                '住宿': 'fa-hotel',
+                '交通': 'fa-car',
+                '景点': 'fa-landmark',
+                '购物': 'fa-shopping-bag',
+                '娱乐': 'fa-theater-masks',
+                '其他': 'fa-map-marker-alt'
+            };
+            for (const key in iconMap) {
+                if (type && type.includes(key)) {
+                    return iconMap[key];
+                }
+            }
+            return 'fa-map-marker-alt';
+        };
+
+        // 格式化日期
+        const formatDate = (dateStr) => {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('zh-CN', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric',
+                weekday: 'short'
+            });
+        };
+
+        // HTML转义函数
+        const escapeHtml = (text) => {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        };
+        
+        // 生成每日行程
         const dayBlocks = days.map((d, idx) => {
             const acts = actsByDay[d.id] || [];
+            const date = d.date ? new Date(d.date) : (startDate ? new Date(startDate.getTime() + idx * 24 * 60 * 60 * 1000) : null);
+            
             const actsHtml = acts.length
-                ? acts.map(a => `
-                    <li>
-                        <strong>${a.title || a.type || '活动'}</strong>
-                        ${a.location ? ` - ${a.location}` : ''}
-                        ${a.cost ? ` - ¥${a.cost}` : ''}
-                        ${a.description ? `<div class="muted">${a.description}</div>` : ''}
-                    </li>
-                `).join('')
-                : '<li class="muted">暂无活动</li>';
+                ? acts.map((a, actIdx) => {
+                    const icon = getActivityIcon(a.type);
+                    const title = escapeHtml(a.title || a.type || '活动');
+                    const location = a.location ? escapeHtml(a.location) : '';
+                    const description = a.description ? escapeHtml(a.description) : '';
+                    const cost = a.cost ? parseFloat(a.cost).toFixed(2) : '';
+                    
+                    return `
+                        <div class="activity-item">
+                            <div class="activity-icon">
+                                <i class="fas ${icon}"></i>
+                            </div>
+                            <div class="activity-content">
+                                <div class="activity-header">
+                                    <h5 class="activity-title">${title}</h5>
+                                    ${cost ? `<span class="activity-cost">¥${cost}</span>` : ''}
+                                </div>
+                                ${location ? `<div class="activity-location"><i class="fas fa-map-marker-alt"></i> ${location}</div>` : ''}
+                                ${description ? `<div class="activity-description">${description}</div>` : ''}
+                                ${location ? `<button class="btn btn-small btn-outline view-on-map-btn" data-location="${location.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}">
+                                    <i class="fas fa-map"></i> 查看地图
+                                </button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')
+                : '<div class="activity-item empty"><div class="activity-content"><p class="muted">暂无活动安排</p></div></div>';
 
             return `
-                <div class="plan-day">
-                    <h4>第 ${d.day_number || (idx+1)} 天 ${d.date ? `（${new Date(d.date).toLocaleDateString()}）` : ''}</h4>
-                    <ul class="plan-activities">${actsHtml}</ul>
+                <div class="plan-day-card">
+                    <div class="day-header">
+                        <div class="day-number">
+                            <span class="day-badge">Day ${d.day_number || (idx + 1)}</span>
+                        </div>
+                        <div class="day-info">
+                            <h4 class="day-title">第 ${d.day_number || (idx + 1)} 天</h4>
+                            ${date ? `<p class="day-date"><i class="fas fa-calendar"></i> ${formatDate(date.toISOString().split('T')[0])}</p>` : ''}
+                        </div>
+                        <div class="day-stats">
+                            ${acts.length > 0 ? `<span class="activity-count"><i class="fas fa-list"></i> ${acts.length} 个活动</span>` : ''}
+                            ${acts.reduce((sum, a) => sum + (parseFloat(a.cost) || 0), 0) > 0 
+                                ? `<span class="day-cost">¥${acts.reduce((sum, a) => sum + (parseFloat(a.cost) || 0), 0).toFixed(2)}</span>` 
+                                : ''}
+                        </div>
+                    </div>
+                    <div class="day-activities">
+                        ${actsHtml}
+                    </div>
                 </div>
             `;
         }).join('');
 
+        // 生成HTML
         const html = `
-            <div class="plan-detail">
-                <h3>${plan.title || '行程详情'}</h3>
-                <p><strong>目的地：</strong>${plan.destination || '-'}</p>
-                <p><strong>日期：</strong>${plan.start_date || '-'} 至 ${plan.end_date || '-'}</p>
-                <p><strong>预算：</strong>${plan.budget != null ? '¥' + plan.budget : '-'}</p>
-                <p><strong>人数：</strong>${plan.people || '-'}</p>
-                <div class="plan-days">
+            <div class="plan-detail-container">
+                <!-- 行程头部信息 -->
+                <div class="plan-header">
+                    <div class="plan-header-main">
+                        <h2 class="plan-title">
+                            <i class="fas fa-map-marked-alt"></i>
+                            ${escapeHtml(plan.title || '行程详情')}
+                        </h2>
+                        <div class="plan-meta">
+                            <div class="meta-item">
+                                <i class="fas fa-location-dot"></i>
+                                <span>${escapeHtml(plan.destination || '-')}</span>
+                            </div>
+                            <div class="meta-item">
+                                <i class="fas fa-calendar-days"></i>
+                                <span>${totalDays} 天</span>
+                            </div>
+                            <div class="meta-item">
+                                <i class="fas fa-users"></i>
+                                <span>${escapeHtml(String(plan.people || '-'))} 人</span>
+                            </div>
+                            <div class="meta-item">
+                                <i class="fas fa-wallet"></i>
+                                <span>预算 ¥${budget.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="plan-dates">
+                        <div class="date-item">
+                            <div class="date-label">出发日期</div>
+                            <div class="date-value">${startDate ? escapeHtml(formatDate(plan.start_date)) : '-'}</div>
+                        </div>
+                        <div class="date-separator">
+                            <i class="fas fa-arrow-right"></i>
+                        </div>
+                        <div class="date-item">
+                            <div class="date-label">返回日期</div>
+                            <div class="date-value">${endDate ? escapeHtml(formatDate(plan.end_date)) : '-'}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 费用统计 -->
+                ${budget > 0 ? `
+                <div class="plan-expense-summary">
+                    <h3><i class="fas fa-chart-pie"></i> 费用统计</h3>
+                    <div class="expense-stats">
+                        <div class="expense-stat-item">
+                            <div class="expense-label">总支出</div>
+                            <div class="expense-value expense-total">¥${totalExpense.toFixed(2)}</div>
+                        </div>
+                        <div class="expense-stat-item">
+                            <div class="expense-label">预算</div>
+                            <div class="expense-value expense-budget">¥${budget.toFixed(2)}</div>
+                        </div>
+                        <div class="expense-stat-item">
+                            <div class="expense-label">剩余</div>
+                            <div class="expense-value ${remaining > 0 ? 'expense-remaining' : 'expense-over'}">
+                                ${remaining > 0 ? '¥' + remaining.toFixed(2) : '已超支 ¥' + Math.abs(remaining).toFixed(2)}
+                            </div>
+                        </div>
+                        <div class="expense-stat-item">
+                            <div class="expense-label">使用率</div>
+                            <div class="expense-value expense-percentage">${expensePercentage}%</div>
+                        </div>
+                    </div>
+                    <div class="expense-progress">
+                        <div class="expense-progress-bar" style="width: ${Math.min(expensePercentage, 100)}%"></div>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- 每日行程 -->
+                <div class="plan-days-container">
+                    <h3 class="section-title">
+                        <i class="fas fa-route"></i>
+                        行程安排
+                    </h3>
                     ${dayBlocks || '<p class="muted">暂无行程日程</p>'}
+                </div>
+
+                <!-- 操作按钮 -->
+                <div class="plan-actions-footer">
+                    <button class="btn btn-primary view-plan-on-map-btn" data-plan-id="${plan.id || ''}">
+                        <i class="fas fa-map"></i> 在地图上查看
+                    </button>
+                    <button class="btn btn-outline export-plan-btn" data-plan-id="${plan.id || ''}">
+                        <i class="fas fa-download"></i> 导出行程
+                    </button>
                 </div>
             </div>
         `;
 
         const modal = document.getElementById('modal');
         const body = document.getElementById('modalBody');
+        const modalContent = document.getElementById('modalContent');
+        
         body.innerHTML = html;
+        
+        // 更新模态框样式以适应更大的内容
+        if (modalContent) {
+            modalContent.classList.add('large');
+        }
+        
+        // 绑定查看地图按钮事件
+        body.querySelectorAll('.view-on-map-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const location = btn.getAttribute('data-location');
+                if (location) {
+                    this.viewLocationOnMap(location);
+                }
+            });
+        });
+        
+        // 绑定在地图上查看行程按钮事件
+        const viewPlanBtn = body.querySelector('.view-plan-on-map-btn');
+        if (viewPlanBtn) {
+            viewPlanBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const planId = viewPlanBtn.getAttribute('data-plan-id');
+                if (planId) {
+                    this.viewPlanOnMap(planId);
+                }
+            });
+        }
+        
+        // 绑定导出行程按钮事件
+        const exportPlanBtn = body.querySelector('.export-plan-btn');
+        if (exportPlanBtn) {
+            exportPlanBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const planId = exportPlanBtn.getAttribute('data-plan-id');
+                if (planId) {
+                    this.exportPlan(planId);
+                }
+            });
+        }
+        
         modal.style.display = 'block';
+    }
+
+    // 在地图上查看位置
+    viewLocationOnMap(location) {
+        if (!location) {
+            this.showMessage('地点信息为空', 'error');
+            return;
+        }
+
+        console.log('查看地点:', location);
+
+        // 关闭模态框
+        const modal = document.getElementById('modal');
+        if (modal) {
+            modal.style.display = 'none';
+            const modalContent = document.getElementById('modalContent');
+            if (modalContent) {
+                modalContent.classList.remove('large');
+            }
+        }
+
+        // 切换到地图页面
+        this.showPage('map');
+
+        // 等待地图初始化完成后再搜索
+        const searchLocation = async () => {
+            try {
+                const searchInput = document.getElementById('mapSearchKeyword');
+                if (!searchInput) {
+                    // 如果输入框不存在，等待一下再试
+                    setTimeout(searchLocation, 200);
+                    return;
+                }
+
+                // 设置搜索关键词
+                searchInput.value = location;
+
+                // 等待地图初始化
+                let attempts = 0;
+                const maxAttempts = 50; // 最多等待5秒
+
+                const waitForMap = () => {
+                    return new Promise((resolve) => {
+                        const checkMap = setInterval(() => {
+                            attempts++;
+                            if (this.map && window.AMap && this.map.getSize) {
+                                clearInterval(checkMap);
+                                resolve(true);
+                            } else if (attempts >= maxAttempts) {
+                                clearInterval(checkMap);
+                                resolve(false);
+                            }
+                        }, 100);
+                    });
+                };
+
+                const mapReady = await waitForMap();
+
+                if (mapReady) {
+                    // 地图已准备好，执行搜索
+                    console.log('地图已准备好，开始搜索:', location);
+                    await this.searchPOI();
+                } else {
+                    // 地图未加载，尝试初始化
+                    console.log('地图未加载，尝试初始化...');
+                    this.initMap().then(() => {
+                        setTimeout(() => {
+                            this.searchPOI();
+                        }, 500);
+                    }).catch((error) => {
+                        console.error('地图初始化失败:', error);
+                        this.showMessage('地图加载失败，请检查API Key配置', 'error');
+                    });
+                }
+            } catch (error) {
+                console.error('搜索地点失败:', error);
+                this.showMessage('搜索地点失败: ' + error.message, 'error');
+            }
+        };
+
+        // 延迟执行，确保页面切换完成
+        setTimeout(searchLocation, 500);
+    }
+
+    // 在地图上查看整个行程
+    async viewPlanOnMap(planId) {
+        if (!planId) {
+            this.showMessage('行程ID无效', 'error');
+            return;
+        }
+
+        // 关闭模态框
+        const modal = document.getElementById('modal');
+        if (modal) {
+            modal.style.display = 'none';
+            const modalContent = document.getElementById('modalContent');
+            if (modalContent) {
+                modalContent.classList.remove('large');
+            }
+        }
+
+        // 切换到地图页面
+        this.showPage('map');
+
+        try {
+            // 获取行程详情
+            const response = await this.apiCall(`/travel/plan/${planId}`, 'GET');
+            if (!response.ok) {
+                this.showMessage('获取行程详情失败', 'error');
+                return;
+            }
+
+            const data = await response.json();
+            const plan = data.plan || {};
+            const days = data.days || [];
+            const actsByDay = data.activities_by_day || {};
+
+            // 收集所有地点
+            const locations = [];
+            days.forEach(day => {
+                const acts = actsByDay[day.id] || [];
+                acts.forEach(act => {
+                    if (act.location && !locations.includes(act.location)) {
+                        locations.push(act.location);
+                    }
+                });
+            });
+
+            if (locations.length === 0) {
+                this.showMessage('该行程没有地点信息', 'info');
+                return;
+            }
+
+            // 等待地图初始化
+            const loadLocationsOnMap = async () => {
+                try {
+                    // 等待地图准备就绪
+                    let attempts = 0;
+                    const maxAttempts = 50; // 最多等待5秒
+
+                    const waitForMap = () => {
+                        return new Promise((resolve) => {
+                            const checkMap = setInterval(() => {
+                                attempts++;
+                                if (this.map && window.AMap && this.map.getSize) {
+                                    clearInterval(checkMap);
+                                    resolve(true);
+                                } else if (attempts >= maxAttempts) {
+                                    clearInterval(checkMap);
+                                    resolve(false);
+                                }
+                            }, 100);
+                        });
+                    };
+
+                    const mapReady = await waitForMap();
+
+                    if (!mapReady) {
+                        // 地图未加载，尝试初始化
+                        console.log('地图未加载，尝试初始化...');
+                        await this.initMap();
+                        // 再等待一下
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+
+                    if (this.map && window.AMap) {
+                        // 清除现有标记
+                        this.clearMarkers();
+
+                        // 批量搜索地点
+                        let loadedCount = 0;
+                        const promises = [];
+
+                        locations.forEach((location, index) => {
+                            const promise = new Promise((resolve) => {
+                                setTimeout(async () => {
+                                    try {
+                                        await this.geocodeAddressForLocation(location, index === 0);
+                                        loadedCount++;
+                                        resolve();
+                                    } catch (error) {
+                                        console.error(`加载地点 ${location} 失败:`, error);
+                                        resolve();
+                                    }
+                                }, index * 200); // 延迟加载，避免请求过快
+                            });
+                            promises.push(promise);
+                        });
+
+                        // 等待所有地点加载完成
+                        await Promise.all(promises);
+                        
+                        // 如果有多个地点，调整地图视野以显示所有标记
+                        if (locations.length > 1 && this.mapMarkers.length > 0) {
+                            const bounds = new AMap.Bounds();
+                            this.mapMarkers.forEach(marker => {
+                                const position = marker.getPosition();
+                                bounds.extend(position);
+                            });
+                            this.map.setBounds(bounds);
+                        }
+
+                        this.showMessage(`已加载 ${loadedCount}/${locations.length} 个地点`, 'success');
+                    } else {
+                        this.showMessage('地图加载失败，请检查API Key配置', 'error');
+                    }
+                } catch (error) {
+                    console.error('加载地点失败:', error);
+                    this.showMessage('加载地点失败: ' + error.message, 'error');
+                }
+            };
+
+            this.showMessage(`正在加载 ${locations.length} 个地点...`, 'info');
+            setTimeout(loadLocationsOnMap, 500);
+        } catch (error) {
+            console.error('加载行程地点失败:', error);
+            this.showMessage('加载行程地点失败', 'error');
+        }
+    }
+
+    // 地理编码地址并在地图上标记（不设置起点/终点）
+    async geocodeAddressForLocation(location, centerMap = false) {
+        if (!location) return;
+
+        try {
+            const apiKey = await this.getAmapApiKey();
+            if (apiKey) {
+                // 直接调用高德地图API
+                const url = `https://restapi.amap.com/v3/geocode/geo?key=${apiKey}&address=${encodeURIComponent(location)}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                    const geocode = data.geocodes[0];
+                    const [lng, lat] = geocode.location.split(',').map(Number);
+                    
+                    if (this.map) {
+                        // 添加标记
+                        this.addMarker([lng, lat], location, 'default');
+                        
+                        // 如果是第一个地点，居中显示
+                        if (centerMap) {
+                            this.map.setCenter([lng, lat]);
+                            this.map.setZoom(13);
+                        }
+                    }
+                    return { lng, lat, location };
+                }
+            } else if (this.token) {
+                // 通过后端API
+                const response = await this.apiCall('/map/geocode', 'POST', { address: location });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.geocodes && data.geocodes.length > 0) {
+                        const geocode = data.geocodes[0];
+                        const [lng, lat] = geocode.location.split(',').map(Number);
+                        
+                        if (this.map) {
+                            this.addMarker([lng, lat], location, 'default');
+                            if (centerMap) {
+                                this.map.setCenter([lng, lat]);
+                                this.map.setZoom(13);
+                            }
+                        }
+                        return { lng, lat, location };
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('地理编码失败:', error);
+        }
+        return null;
+    }
+
+    // 导出行程
+    exportPlan(planId) {
+        this.showMessage('导出功能开发中...', 'info');
+        // TODO: 实现行程导出功能
     }
 
     async apiCall(endpoint, method = 'GET', data = null) {
@@ -894,18 +1668,53 @@ class TravelPlannerApp {
     }
 
     // 加载设置
-    loadSettings() {
+    async loadSettings() {
         try {
-            const settings = JSON.parse(localStorage.getItem('userSettings') || '{}');
-            if (settings.openaiApiKey) {
-                document.getElementById('openaiApiKey').value = settings.openaiApiKey;
+            // 先从localStorage加载
+            const localSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+            if (localSettings.openaiApiKey) {
+                document.getElementById('openaiApiKey').value = localSettings.openaiApiKey;
             }
-            if (settings.openaiBaseUrl) {
-                document.getElementById('openaiBaseUrl').value = settings.openaiBaseUrl;
+            if (localSettings.openaiBaseUrl) {
+                document.getElementById('openaiBaseUrl').value = localSettings.openaiBaseUrl;
             }
-            if (settings.openaiModel) {
+            if (localSettings.openaiModel) {
                 const modelInput = document.getElementById('openaiModel');
-                if (modelInput) modelInput.value = settings.openaiModel;
+                if (modelInput) modelInput.value = localSettings.openaiModel;
+            }
+            if (localSettings.amapApiKey) {
+                document.getElementById('amapApiKey').value = localSettings.amapApiKey;
+            }
+
+            // 如果已登录，从后端加载设置
+            if (this.token) {
+                try {
+                    const response = await this.apiCall('/settings', 'GET');
+                    if (response.ok) {
+                        const data = await response.json();
+                        const settings = data.settings || {};
+                        
+                        // 更新OpenAI设置（如果后端有完整值）
+                        if (settings.openai_base_url) {
+                            document.getElementById('openaiBaseUrl').value = settings.openai_base_url;
+                        }
+                        if (settings.openai_model) {
+                            const modelInput = document.getElementById('openaiModel');
+                            if (modelInput) modelInput.value = settings.openai_model;
+                        }
+                        
+                        // 更新高德地图API Key（后端返回完整值）
+                        if (settings.amap_api_key) {
+                            document.getElementById('amapApiKey').value = settings.amap_api_key;
+                            // 同时更新localStorage
+                            const updatedSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+                            updatedSettings.amapApiKey = settings.amap_api_key;
+                            localStorage.setItem('userSettings', JSON.stringify(updatedSettings));
+                        }
+                    }
+                } catch (error) {
+                    console.warn('从后端加载设置失败:', error);
+                }
             }
         } catch (error) {
             console.error('加载设置失败:', error);
@@ -930,13 +1739,12 @@ class TravelPlannerApp {
 
         try {
             // 保存到localStorage
-            const settings = {
-                openaiApiKey: apiKey,
-                openaiBaseUrl: baseUrl,
-                openaiModel: model,
-                savedAt: new Date().toISOString()
-            };
-            localStorage.setItem('userSettings', JSON.stringify(settings));
+            const localSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+            localSettings.openaiApiKey = apiKey;
+            localSettings.openaiBaseUrl = baseUrl;
+            localSettings.openaiModel = model;
+            localSettings.savedAt = new Date().toISOString();
+            localStorage.setItem('userSettings', JSON.stringify(localSettings));
 
             // 如果已登录，也保存到后端
             if (this.token) {
@@ -958,6 +1766,80 @@ class TravelPlannerApp {
         } catch (error) {
             this.showApiKeyStatus('保存设置失败: ' + error.message, 'error');
         }
+    }
+
+    // 保存高德地图设置
+    async saveAmapSettings() {
+        const amapApiKey = document.getElementById('amapApiKey').value.trim();
+
+        if (!amapApiKey) {
+            this.showAmapApiKeyStatus('请输入高德地图API Key', 'error');
+            return;
+        }
+
+        try {
+            // 保存到localStorage
+            const localSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+            localSettings.amapApiKey = amapApiKey;
+            localSettings.amapSavedAt = new Date().toISOString();
+            localStorage.setItem('userSettings', JSON.stringify(localSettings));
+
+            // 如果已登录，也保存到后端
+            if (this.token) {
+                try {
+                    await this.apiCall('/settings', 'PUT', {
+                        amap_api_key: amapApiKey
+                    });
+                } catch (error) {
+                    console.warn('保存到后端失败，已保存到本地:', error);
+                }
+            }
+
+            this.showAmapApiKeyStatus('地图设置已保存成功！', 'success');
+        } catch (error) {
+            this.showAmapApiKeyStatus('保存设置失败: ' + error.message, 'error');
+        }
+    }
+
+    // 测试高德地图API Key
+    async testAmapApiKey() {
+        const amapApiKey = document.getElementById('amapApiKey').value.trim();
+
+        if (!amapApiKey) {
+            this.showAmapApiKeyStatus('请先输入高德地图API Key', 'error');
+            return;
+        }
+
+        this.showAmapApiKeyStatus('正在测试连接...', 'info');
+        document.getElementById('testAmapApiKeyBtn').disabled = true;
+
+        try {
+            // 直接调用高德地图API测试Key
+            const testUrl = `https://restapi.amap.com/v3/geocode/geo?key=${amapApiKey}&address=北京市`;
+            const response = await fetch(testUrl);
+            const data = await response.json();
+
+            if (data.status === '1') {
+                this.showAmapApiKeyStatus('✓ 高德地图API Key验证成功！连接正常', 'success');
+            } else {
+                this.showAmapApiKeyStatus('✗ 验证失败: ' + (data.info || 'API Key无效或网络错误'), 'error');
+            }
+        } catch (error) {
+            this.showAmapApiKeyStatus('✗ 测试失败: ' + error.message, 'error');
+        } finally {
+            document.getElementById('testAmapApiKeyBtn').disabled = false;
+        }
+    }
+
+    // 显示高德地图API Key状态
+    showAmapApiKeyStatus(message, type) {
+        const statusDiv = document.getElementById('amapApiKeyStatus');
+        statusDiv.textContent = message;
+        statusDiv.className = `api-key-status ${type} show`;
+        
+        setTimeout(() => {
+            statusDiv.classList.remove('show');
+        }, 5000);
     }
 
     // 测试API Key
@@ -1030,6 +1912,699 @@ class TravelPlannerApp {
             return null;
         }
     }
+
+    // 初始化地图
+    async initMap() {
+        // 检查地图容器是否存在
+        const mapContainer = document.getElementById('mapContainer');
+        if (!mapContainer) {
+            console.error('地图容器不存在');
+            this.showMessage('地图容器未找到', 'error');
+            return;
+        }
+
+        // 显示加载状态
+        const mapLoading = document.getElementById('mapLoading');
+        const mapError = document.getElementById('mapError');
+        if (mapLoading) mapLoading.style.display = 'block';
+        if (mapError) mapError.style.display = 'none';
+
+        // 如果地图已初始化，刷新地图尺寸
+        if (this.map) {
+            // 隐藏加载状态
+            if (mapLoading) mapLoading.style.display = 'none';
+            // 等待容器可见后再刷新地图尺寸
+            setTimeout(() => {
+                if (this.map) {
+                    try {
+                        this.map.resize(); // 重新调整地图尺寸
+                    } catch (e) {
+                        console.warn('刷新地图尺寸失败:', e);
+                    }
+                }
+            }, 100);
+            return;
+        }
+
+        try {
+            // 确保容器可见且有尺寸
+            const mapPage = document.getElementById('map');
+            if (mapPage && !mapPage.classList.contains('active')) {
+                // 如果地图页面未激活，等待一下
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            // 动态加载高德地图SDK
+            if (!this.amapLoaded) {
+                await this.loadAmapSDK();
+            }
+
+            // 检查AMap是否已加载
+            if (!window.AMap) {
+                if (mapLoading) mapLoading.style.display = 'none';
+                if (mapError) mapError.style.display = 'block';
+                this.showMessage('高德地图SDK加载失败，请检查网络连接或API Key配置', 'error');
+                return;
+            }
+
+            // 再次检查容器是否存在且可见
+            if (!mapContainer || mapContainer.offsetHeight === 0) {
+                console.warn('地图容器不可见，等待显示...');
+                // 等待容器显示
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+
+            // 创建地图实例
+            // 确保容器有明确的尺寸
+            if (mapContainer.offsetWidth === 0 || mapContainer.offsetHeight === 0) {
+                console.warn('地图容器尺寸为0，等待容器渲染...');
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            this.map = new AMap.Map('mapContainer', {
+                zoom: 13,
+                center: [116.397428, 39.90923], // 默认北京天安门
+                viewMode: '3D',
+                resizeEnable: true, // 启用自动适应容器尺寸变化
+                mapStyle: 'amap://styles/normal' // 使用标准地图样式
+            });
+
+            // 等待地图加载完成
+            this.map.on('complete', () => {
+                console.log('地图加载完成');
+                // 隐藏加载状态
+                if (mapLoading) mapLoading.style.display = 'none';
+                if (mapError) mapError.style.display = 'none';
+                this.showMessage('地图加载成功', 'success');
+            });
+
+            // 地图加载错误
+            this.map.on('error', (e) => {
+                console.error('地图加载错误:', e);
+                if (mapLoading) mapLoading.style.display = 'none';
+                if (mapError) mapError.style.display = 'block';
+                this.showMessage('地图加载失败: ' + (e.message || '未知错误'), 'error');
+            });
+
+            // 添加地图控件
+            try {
+                this.map.addControl(new AMap.Scale());
+                this.map.addControl(new AMap.ToolBar({
+                    position: 'RT' // 右上角
+                }));
+            } catch (e) {
+                console.warn('添加地图控件失败:', e);
+            }
+
+            // 地图点击事件
+            this.map.on('click', (e) => {
+                this.onMapClick(e);
+            });
+        } catch (error) {
+            console.error('地图初始化失败:', error);
+            if (mapLoading) mapLoading.style.display = 'none';
+            if (mapError) mapError.style.display = 'block';
+            this.showMessage('地图初始化失败: ' + (error.message || error), 'error');
+        }
+    }
+
+    // 动态加载高德地图SDK
+    loadAmapSDK() {
+        return new Promise((resolve, reject) => {
+            if (window.AMap) {
+                this.amapLoaded = true;
+                resolve();
+                return;
+            }
+
+            // 从后端获取高德地图API Key
+            this.getAmapApiKey().then(apiKey => {
+                if (!apiKey) {
+                    const errorMsg = '高德地图API Key未配置，请前往"个人中心" → "设置" → "高德地图API配置"中配置API Key';
+                    // 显示错误提示
+                    const mapLoading = document.getElementById('mapLoading');
+                    const mapError = document.getElementById('mapError');
+                    if (mapLoading) mapLoading.style.display = 'none';
+                    if (mapError) {
+                        mapError.style.display = 'block';
+                        const hint = mapError.querySelector('.map-error-hint');
+                        if (hint) {
+                            hint.textContent = '请前往"个人中心" → "设置" → "高德地图API配置"中配置API Key';
+                        }
+                    }
+                    this.showMessage(errorMsg, 'error');
+                    reject(new Error('API Key not configured'));
+                    return;
+                }
+
+                // 检查是否已经加载过SDK
+                const existingScript = document.querySelector('script[src*="webapi.amap.com"]');
+                if (existingScript && window.AMap) {
+                    console.log('高德地图SDK已加载');
+                    this.amapLoaded = true;
+                    resolve();
+                    return;
+                }
+
+                // 如果存在旧脚本但AMap未加载，移除旧脚本
+                if (existingScript) {
+                    existingScript.remove();
+                }
+
+                // 生成唯一的回调函数名，避免冲突
+                const callbackName = 'onAmapLoaded_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                console.log('开始加载高德地图SDK，API Key:', apiKey.substring(0, 8) + '...');
+                
+                // 设置全局回调函数
+                window[callbackName] = () => {
+                    console.log('高德地图SDK回调触发');
+                    // 等待AMap对象完全初始化
+                    const checkInterval = setInterval(() => {
+                        if (window.AMap && typeof window.AMap.Map === 'function') {
+                            clearInterval(checkInterval);
+                            clearTimeout(timeout);
+                            console.log('高德地图SDK加载成功');
+                            this.amapLoaded = true;
+                            delete window[callbackName];
+                            resolve();
+                        }
+                    }, 50);
+
+                    // 超时检查
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        if (!window.AMap || typeof window.AMap.Map !== 'function') {
+                            delete window[callbackName];
+                            const error = new Error('AMap对象初始化失败');
+                            reject(error);
+                        }
+                    }, 3000);
+                };
+
+                // 创建脚本标签 - 使用1.4.15版本（更稳定，不需要安全密钥）
+                const script = document.createElement('script');
+                script.type = 'text/javascript';
+                script.src = `https://webapi.amap.com/maps?v=1.4.15&key=${apiKey}&callback=${callbackName}`;
+                
+                script.onerror = (error) => {
+                    clearTimeout(timeout);
+                    delete window[callbackName];
+                    console.error('高德地图SDK脚本加载失败:', error);
+                    const mapLoading = document.getElementById('mapLoading');
+                    const mapError = document.getElementById('mapError');
+                    if (mapLoading) mapLoading.style.display = 'none';
+                    if (mapError) {
+                        mapError.style.display = 'block';
+                        const hint = mapError.querySelector('.map-error-hint');
+                        if (hint) {
+                            hint.innerHTML = '请检查：<br>1. API Key是否正确（需要使用JS API Key）<br>2. 网络连接是否正常<br>3. 浏览器控制台是否有错误信息';
+                        }
+                    }
+                    this.showMessage('高德地图SDK加载失败，请检查API Key类型和网络连接', 'error');
+                    reject(new Error('Failed to load AMap SDK script'));
+                };
+
+                // 设置超时（15秒）
+                const timeout = setTimeout(() => {
+                    if (!window.AMap || typeof window.AMap.Map !== 'function') {
+                        delete window[callbackName];
+                        if (script.parentNode) {
+                            script.remove();
+                        }
+                        const mapLoading = document.getElementById('mapLoading');
+                        const mapError = document.getElementById('mapError');
+                        if (mapLoading) mapLoading.style.display = 'none';
+                        if (mapError) {
+                            mapError.style.display = 'block';
+                            const hint = mapError.querySelector('.map-error-hint');
+                            if (hint) {
+                                hint.innerHTML = 'SDK加载超时，请检查：<br>1. API Key是否正确<br>2. 网络连接<br>3. 浏览器是否阻止了脚本加载';
+                            }
+                        }
+                        this.showMessage('高德地图SDK加载超时', 'error');
+                        reject(new Error('AMap SDK load timeout'));
+                    }
+                }, 15000);
+
+                // 添加到页面
+                document.head.appendChild(script);
+                console.log('高德地图SDK脚本已添加到页面');
+            }).catch((error) => {
+                console.error('获取API Key失败:', error);
+                reject(error);
+            });
+        });
+    }
+
+    // 从后端获取高德地图API Key（通过健康检查或配置接口）
+    async getAmapApiKey() {
+        try {
+            // 优先从localStorage获取用户配置的高德地图API Key
+            const settings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+            if (settings.amapApiKey) {
+                return settings.amapApiKey;
+            }
+            
+            // 如果已登录，从后端获取用户设置中的API Key
+            if (this.token) {
+                try {
+                    const response = await this.apiCall('/settings', 'GET');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.settings && data.settings.amap_api_key) {
+                            // 保存到localStorage
+                            settings.amapApiKey = data.settings.amap_api_key;
+                            localStorage.setItem('userSettings', JSON.stringify(settings));
+                            return data.settings.amap_api_key;
+                        }
+                    }
+                } catch (error) {
+                    console.warn('从后端获取设置失败:', error);
+                }
+            }
+            
+            // 最后尝试从后端系统配置获取（公开接口，不需要认证）
+            try {
+                const response = await fetch(`${this.apiBase}/map/api-key`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.apiKey) {
+                        return data.apiKey;
+                    }
+                }
+            } catch (error) {
+                console.warn('从后端系统配置获取API Key失败:', error);
+            }
+        } catch (error) {
+            console.warn('获取高德地图API Key失败:', error);
+        }
+        return null;
+    }
+
+    // 地图点击事件
+    onMapClick(e) {
+        const lng = e.lnglat.getLng();
+        const lat = e.lnglat.getLat();
+        // 可以在这里添加标记或更新起点/终点
+    }
+
+    // 地理编码：地址转坐标
+    async geocodeAddress(type) {
+        const inputId = type === 'origin' ? 'mapOrigin' : 'mapDestination';
+        const address = document.getElementById(inputId).value.trim();
+        if (!address) {
+            this.showMessage('请输入地址', 'error');
+            return;
+        }
+
+        try {
+            // 优先使用用户配置的API Key直接调用高德地图API
+            const apiKey = await this.getAmapApiKey();
+            if (apiKey) {
+                // 直接调用高德地图API
+                const url = `https://restapi.amap.com/v3/geocode/geo?key=${apiKey}&address=${encodeURIComponent(address)}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                    const geocode = data.geocodes[0];
+                    const [lng, lat] = geocode.location.split(',').map(Number);
+                    if (this.map) {
+                        this.map.setCenter([lng, lat]);
+                        this.map.setZoom(15);
+                        this.addMarker([lng, lat], geocode.formatted_address, type);
+                    }
+                    this.showMessage('地址解析成功', 'success');
+                    return;
+                } else {
+                    this.showMessage(data.info || '未找到该地址', 'error');
+                    return;
+                }
+            }
+
+            // 如果没有API Key，尝试通过后端API（需要登录）
+            if (!this.token) {
+                this.showMessage('请先配置高德地图API Key或登录后使用', 'error');
+                return;
+            }
+
+            const response = await this.apiCall('/map/geocode', 'POST', { address });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.geocodes && data.geocodes.length > 0) {
+                    const geocode = data.geocodes[0];
+                    const [lng, lat] = geocode.location.split(',').map(Number);
+                    if (this.map) {
+                        this.map.setCenter([lng, lat]);
+                        this.map.setZoom(15);
+                        this.addMarker([lng, lat], geocode.formatted_address, type);
+                    }
+                    this.showMessage('地址解析成功', 'success');
+                } else {
+                    this.showMessage('未找到该地址', 'error');
+                }
+            } else {
+                const error = await response.json();
+                this.showMessage(error.error || '地址解析失败', 'error');
+            }
+        } catch (error) {
+            this.showMessage('网络错误，请重试', 'error');
+        }
+    }
+
+    // 添加地图标记
+    addMarker(position, title, type = 'default') {
+        if (!this.map) return;
+
+        const icon = type === 'origin' ? 'https://webapi.amap.com/theme/v1.3/markers/n/start.png' :
+                     type === 'destination' ? 'https://webapi.amap.com/theme/v1.3/markers/n/end.png' :
+                     'https://webapi.amap.com/theme/v1.3/markers/n/mid.png';
+
+        const marker = new AMap.Marker({
+            position: position,
+            title: title,
+            icon: new AMap.Icon({
+                image: icon,
+                size: new AMap.Size(32, 32),
+                imageSize: new AMap.Size(32, 32)
+            })
+        });
+
+        marker.setMap(this.map);
+        this.mapMarkers.push(marker);
+    }
+
+    // POI搜索
+    async searchPOI() {
+        const keyword = document.getElementById('mapSearchKeyword').value.trim();
+        if (!keyword) {
+            this.showMessage('请输入搜索关键词', 'error');
+            return;
+        }
+
+        try {
+            // 优先使用用户配置的API Key直接调用高德地图API
+            const apiKey = await this.getAmapApiKey();
+            if (apiKey) {
+                // 直接调用高德地图API
+                const url = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=${encodeURIComponent(keyword)}&offset=20&page=1&extensions=all`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === '1') {
+                    this.displayPOIResults(data.pois || []);
+                    return;
+                } else {
+                    this.showMessage(data.info || '搜索失败', 'error');
+                    return;
+                }
+            }
+
+            // 如果没有API Key，尝试通过后端API（需要登录）
+            if (!this.token) {
+                this.showMessage('请先配置高德地图API Key或登录后使用', 'error');
+                return;
+            }
+
+            const response = await this.apiCall('/map/search-poi', 'POST', { keyword });
+            if (response.ok) {
+                const data = await response.json();
+                this.displayPOIResults(data.pois || []);
+            } else {
+                const error = await response.json();
+                this.showMessage(error.error || '搜索失败', 'error');
+            }
+        } catch (error) {
+            this.showMessage('网络错误，请重试', 'error');
+        }
+    }
+
+    // 显示POI搜索结果
+    displayPOIResults(pois) {
+        const container = document.getElementById('mapPOIList');
+        if (!pois || pois.length === 0) {
+            container.innerHTML = '<p>未找到相关地点</p>';
+            return;
+        }
+
+        container.innerHTML = pois.map(poi => {
+            const [lng, lat] = poi.location.split(',').map(Number);
+            return `
+                <div class="poi-item" data-lng="${lng}" data-lat="${lat}">
+                    <h4>${poi.name}</h4>
+                    <p>${poi.address || ''}</p>
+                    <p class="poi-type">${poi.type || ''}</p>
+                    <button class="btn btn-small btn-outline" onclick="app.selectPOI(${lng}, ${lat}, '${poi.name}')">
+                        选择
+                    </button>
+                </div>
+            `;
+        }).join('');
+
+        // 在地图上标记POI
+        this.clearMarkers();
+        pois.forEach(poi => {
+            const [lng, lat] = poi.location.split(',').map(Number);
+            this.addMarker([lng, lat], poi.name);
+        });
+
+        // 如果有点，缩放到合适范围
+        if (pois.length > 0) {
+            const bounds = new AMap.Bounds();
+            pois.forEach(poi => {
+                const [lng, lat] = poi.location.split(',').map(Number);
+                bounds.extend([lng, lat]);
+            });
+            this.map.setBounds(bounds);
+        }
+    }
+
+    // 选择POI
+    selectPOI(lng, lat, name) {
+        this.map.setCenter([lng, lat]);
+        this.map.setZoom(15);
+        this.showMessage(`已选择: ${name}`, 'success');
+    }
+
+    // 路线规划
+    async planRoute() {
+        const origin = document.getElementById('mapOrigin').value.trim();
+        const destination = document.getElementById('mapDestination').value.trim();
+
+        if (!origin || !destination) {
+            this.showMessage('请填写起点和终点', 'error');
+            return;
+        }
+
+        try {
+            // 获取API Key
+            const apiKey = await this.getAmapApiKey();
+            
+            // 辅助函数：地理编码地址
+            const geocodeAddress = async (address) => {
+                if (apiKey) {
+                    // 直接调用高德地图API
+                    const url = `https://restapi.amap.com/v3/geocode/geo?key=${apiKey}&address=${encodeURIComponent(address)}`;
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                        return { ok: true, geocodes: data.geocodes };
+                    }
+                    return { ok: false, error: data.info || '地址解析失败' };
+                } else if (this.token) {
+                    // 通过后端API
+                    const response = await this.apiCall('/map/geocode', 'POST', { address });
+                    if (response.ok) {
+                        const data = await response.json();
+                        return { ok: true, geocodes: data.geocodes };
+                    }
+                    const error = await response.json();
+                    return { ok: false, error: error.error || '地址解析失败' };
+                } else {
+                    return { ok: false, error: '请先配置高德地图API Key或登录后使用' };
+                }
+            };
+
+            // 先进行地理编码，获取坐标
+            const originGeocode = await geocodeAddress(origin);
+            const destGeocode = await geocodeAddress(destination);
+
+            if (!originGeocode.ok || !destGeocode.ok) {
+                const error = originGeocode.error || destGeocode.error || '地址解析失败';
+                this.showMessage(error, 'error');
+                return;
+            }
+
+            const originLoc = originGeocode.geocodes[0].location;
+            const destLoc = destGeocode.geocodes[0].location;
+
+            // 规划路线
+            if (apiKey) {
+                // 直接调用高德地图API
+                const routeType = this.mapMode === 'driving' ? 'driving' : 
+                                 this.mapMode === 'walking' ? 'walking' : 'transit';
+                let routeUrl = '';
+                if (routeType === 'transit') {
+                    routeUrl = `https://restapi.amap.com/v3/direction/transit/integrated?key=${apiKey}&origin=${originLoc}&destination=${destLoc}`;
+                } else {
+                    routeUrl = `https://restapi.amap.com/v3/direction/${routeType}?key=${apiKey}&origin=${originLoc}&destination=${destLoc}`;
+                }
+                
+                const response = await fetch(routeUrl);
+                const data = await response.json();
+                
+                if (data.status === '1') {
+                    this.displayRoute(data.route, originLoc, destLoc);
+                } else {
+                    this.showMessage(data.info || '路线规划失败', 'error');
+                }
+            } else if (this.token) {
+                // 通过后端API
+                const response = await this.apiCall('/map/route', 'POST', {
+                    origin: originLoc,
+                    destination: destLoc,
+                    mode: this.mapMode,
+                    city: ''
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    this.displayRoute(data.route, originLoc, destLoc);
+                } else {
+                    const error = await response.json();
+                    this.showMessage(error.error || '路线规划失败', 'error');
+                }
+            } else {
+                this.showMessage('请先配置高德地图API Key或登录后使用', 'error');
+            }
+        } catch (error) {
+            this.showMessage('网络错误，请重试', 'error');
+        }
+    }
+
+    // 显示路线
+    displayRoute(routeData, originLoc, destLoc) {
+        if (!this.map || !routeData.paths || routeData.paths.length === 0) {
+            this.showMessage('未找到路线', 'error');
+            return;
+        }
+
+        // 清除之前的路线
+        if (this.mapRoute) {
+            this.map.remove(this.mapRoute);
+            this.mapRoute = null;
+        }
+
+        const path = routeData.paths[0];
+        
+        // 解析路线坐标点
+        let route = [];
+        if (path.steps && path.steps.length > 0) {
+            // 从steps中提取polyline
+            path.steps.forEach(step => {
+                if (step.polyline) {
+                    const points = step.polyline.split(';').map(point => {
+                        const coords = point.split(',');
+                        if (coords.length === 2) {
+                            const lng = parseFloat(coords[0]);
+                            const lat = parseFloat(coords[1]);
+                            if (!isNaN(lng) && !isNaN(lat)) {
+                                return [lng, lat];
+                            }
+                        }
+                        return null;
+                    }).filter(p => p !== null);
+                    route = route.concat(points);
+                }
+            });
+        }
+
+        // 如果没有从steps中提取到路线，尝试从path的其他字段获取
+        if (route.length === 0 && path.steps && path.steps.length > 0) {
+            // 使用起点和终点作为简单路线
+            const [originLng, originLat] = originLoc.split(',').map(Number);
+            const [destLng, destLat] = destLoc.split(',').map(Number);
+            route = [[originLng, originLat], [destLng, destLat]];
+        }
+
+        // 绘制路线
+        if (route.length > 0) {
+            this.mapRoute = new AMap.Polyline({
+                path: route,
+                strokeColor: '#3366FF',
+                strokeWeight: 6,
+                strokeOpacity: 0.8
+            });
+            this.map.add(this.mapRoute);
+        }
+
+        // 添加起点和终点标记
+        const [originLng, originLat] = originLoc.split(',').map(Number);
+        const [destLng, destLat] = destLoc.split(',').map(Number);
+        this.clearMarkers();
+        this.addMarker([originLng, originLat], '起点', 'origin');
+        this.addMarker([destLng, destLat], '终点', 'destination');
+
+        // 显示路线信息
+        const distance = path.distance ? (parseFloat(path.distance) / 1000).toFixed(2) : '未知';
+        const duration = path.duration ? (parseFloat(path.duration) / 60).toFixed(0) : '未知';
+        const routeInfo = document.getElementById('mapRouteInfo');
+        const routeDetails = document.getElementById('mapRouteDetails');
+        routeInfo.style.display = 'block';
+        
+        const stepsHtml = path.steps && path.steps.length > 0 
+            ? `<div class="route-steps">
+                <h5>路线步骤：</h5>
+                <ol>
+                    ${path.steps.map(step => `<li>${step.instruction || step.road || '路线步骤'}</li>`).join('')}
+                </ol>
+            </div>`
+            : '';
+        
+        routeDetails.innerHTML = `
+            <p><strong>距离：</strong>${distance} 公里</p>
+            <p><strong>时间：</strong>约 ${duration} 分钟</p>
+            <p><strong>方式：</strong>${this.mapMode === 'driving' ? '驾车' : this.mapMode === 'walking' ? '步行' : '公交'}</p>
+            ${stepsHtml}
+        `;
+
+        // 调整地图视野
+        const bounds = new AMap.Bounds();
+        bounds.extend([originLng, originLat]);
+        bounds.extend([destLng, destLat]);
+        this.map.setBounds(bounds);
+
+        this.showMessage('路线规划成功', 'success');
+    }
+
+    // 清除地图标记和路线
+    clearMap() {
+        this.clearMarkers();
+        if (this.mapRoute) {
+            this.map.remove(this.mapRoute);
+            this.mapRoute = null;
+        }
+        document.getElementById('mapOrigin').value = '';
+        document.getElementById('mapDestination').value = '';
+        document.getElementById('mapSearchKeyword').value = '';
+        document.getElementById('mapRouteInfo').style.display = 'none';
+        document.getElementById('mapPOIList').innerHTML = '';
+        this.showMessage('地图已清除', 'success');
+    }
+
+    // 清除标记
+    clearMarkers() {
+        this.mapMarkers.forEach(marker => {
+            this.map.remove(marker);
+        });
+        this.mapMarkers = [];
+    }
+
 }
 
 // 初始化应用

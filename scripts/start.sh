@@ -10,19 +10,16 @@ if ! command -v go &> /dev/null; then
     exit 1
 fi
 
-# 检查环境变量文件
-if [ ! -f ".env" ]; then
-    echo "⚠️  未找到.env文件，正在复制示例配置..."
-    cp env.example .env
-    echo "📝 请编辑.env文件，填入相应的API密钥"
+# 检查配置文件
+if [ ! -f "config.yaml" ]; then
+    echo "⚠️  未找到config.yaml文件，正在复制示例配置..."
+    cp config.yaml.example config.yaml
+    echo "📝 请编辑config.yaml文件，填入相应的API密钥"
     echo "   必需的配置项："
-    echo "   - SUPABASE_URL"
-    echo "   - SUPABASE_ANON_KEY" 
-    echo "   - OPENAI_API_KEY"
-    echo "   - AMAP_API_KEY"
-    echo "   - XUNFEI_APP_ID"
-    echo "   - XUNFEI_API_KEY"
-    echo "   - XUNFEI_API_SECRET"
+    echo "   - database.supabase_url"
+    echo "   - database.supabase_key"
+    echo "   - database.supabase_secret"
+    echo "   - apis.openai.api_key"
     echo ""
     read -p "按Enter键继续..."
 fi
@@ -37,14 +34,9 @@ go test ./...
 
 # 启动服务器
 echo "🌟 启动服务器..."
-echo "   服务地址: http://localhost:8080"
-echo "   API文档: http://localhost:8080/health"
+echo "   服务地址: http://localhost:9090"
+echo "   API文档: http://localhost:9090/health"
 echo ""
 echo "按Ctrl+C停止服务器"
 
 go run main.go
-
-
-
-
-

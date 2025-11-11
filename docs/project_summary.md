@@ -132,9 +132,9 @@ cd AI-Travel-Planner
 # 安装依赖
 go mod tidy
 
-# 配置环境变量
-cp env.example .env
-# 编辑.env文件，填入API密钥
+# 配置配置文件
+cp config.yaml.example config.yaml
+# 编辑 config.yaml 文件，填入API密钥
 
 # 启动服务
 go run main.go
@@ -144,7 +144,7 @@ go run main.go
 ```bash
 # Docker部署
 docker build -t ai-travel-planner .
-docker run -p 8080:8080 --env-file .env ai-travel-planner
+docker run -p 9090:9090 -v ./config.yaml:/app/config.yaml:ro ai-travel-planner
 
 # 或使用Docker Compose
 docker-compose up -d
@@ -168,11 +168,6 @@ docker-compose up -d
 - `POST /api/v1/voice/recognize` - 语音识别
 - `POST /api/v1/voice/synthesize` - 语音合成
 
-### 地图接口
-- `GET /api/v1/map/search` - 地点搜索
-- `GET /api/v1/map/route` - 路线规划
-- `GET /api/v1/map/nearby` - 附近地点
-
 ## 配置说明
 
 ### 必需的环境变量
@@ -186,7 +181,6 @@ JWT_SECRET=your_jwt_secret_key
 
 # 外部API配置
 OPENAI_API_KEY=your_openai_api_key
-AMAP_API_KEY=your_amap_api_key
 XUNFEI_APP_ID=your_xunfei_app_id
 XUNFEI_API_KEY=your_xunfei_api_key
 XUNFEI_API_SECRET=your_xunfei_api_secret
@@ -273,6 +267,8 @@ MIT License
 **项目状态**: ✅ 核心功能已完成，可投入使用
 **最后更新**: 2024年10月
 **版本**: v1.0.0
+
+
 
 
 

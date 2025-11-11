@@ -34,6 +34,8 @@ func (h *SettingsHandler) GetSettings(c *gin.Context) {
 			"settings": map[string]interface{}{
 				"openai_api_key":  "",
 				"openai_base_url": "https://api.openai.com/v1",
+				"openai_model":    "",
+				"amap_api_key":    "",
 			},
 		})
 		return
@@ -50,22 +52,29 @@ func (h *SettingsHandler) GetSettings(c *gin.Context) {
 	}
 
 	// 只返回API Key的前几位和后几位，中间用*代替（安全考虑）
-	apiKey := ""
+	openaiApiKey := ""
 	if key, ok := settings["openai_api_key"].(string); ok && key != "" {
 		if len(key) > 8 {
-			apiKey = key[:4] + "****" + key[len(key)-4:]
+			openaiApiKey = key[:4] + "****" + key[len(key)-4:]
 		} else {
-			apiKey = "****"
+			openaiApiKey = "****"
 		}
 	}
 
-    c.JSON(http.StatusOK, gin.H{
-        "settings": map[string]interface{}{
-            "openai_api_key":  apiKey,
-            "openai_base_url": settings["openai_base_url"],
-            "openai_model":    settings["openai_model"],
-        },
-    })
+	// 高德地图API Key（完整返回，因为用户需要在前端使用）
+	amapApiKey := ""
+	if key, ok := settings["amap_api_key"].(string); ok && key != "" {
+		amapApiKey = key // 高德地图API Key可以在前端使用，所以返回完整值
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"settings": map[string]interface{}{
+			"openai_api_key":  openaiApiKey,
+			"openai_base_url": settings["openai_base_url"],
+			"openai_model":    settings["openai_model"],
+			"amap_api_key":    amapApiKey,
+		},
+	})
 }
 
 // UpdateSettings 更新用户设置
@@ -75,6 +84,8 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 	var req struct {
 		OpenAIApiKey  string `json:"openai_api_key"`
 		OpenAIBaseURL string `json:"openai_base_url"`
+		OpenAIModel   string `json:"openai_model"`
+		AmapAPIKey    string `json:"amap_api_key"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -113,25 +124,17 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 	if req.OpenAIApiKey != "" {
 		settings["openai_api_key"] = req.OpenAIApiKey
 	}
-    if req.OpenAIBaseURL != "" {
+	if req.OpenAIBaseURL != "" {
 		settings["openai_base_url"] = req.OpenAIBaseURL
-	} else {
+	} else if settings["openai_base_url"] == nil {
 		settings["openai_base_url"] = "https://api.openai.com/v1"
 	}
-    if reqMap := c.Request.Context(); reqMap != nil {
-        // no-op; keep placeholder for future
-    }
-    // 处理模型
-    // 已经完成绑定 req，无需重复解析
-    // 因为已绑定，读取原始模型字段可能已在req结构体外
-    if c.Request.Header.Get("Content-Type") == "application/json" {
-        // try decode raw body clone not available now; rely on req only
-    }
-    // 优先使用 req 里字段（若通过前端发送）
-    if m, ok := c.GetPostForm("openai_model"); ok && m != "" {
-        settings["openai_model"] = m
-    } else if req.OpenAIBaseURL != "" { // no-op branch placeholder
-    }
+	if req.OpenAIModel != "" {
+		settings["openai_model"] = req.OpenAIModel
+	}
+	if req.AmapAPIKey != "" {
+		settings["amap_api_key"] = req.AmapAPIKey
+	}
 
 	// 保存设置
 	settingsJSON, err := json.Marshal(settings)

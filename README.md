@@ -19,6 +19,146 @@
 - **AI服务**: OpenAI GPT-3.5
 - **认证**: JWT Token
 
+## 配置说明
+
+本项目使用 YAML 配置文件进行配置，不再使用环境变量。
+
+### 配置文件设置
+
+1. **创建配置文件**
+   ```bash
+   # 使用脚本（推荐）
+   # Windows PowerShell
+   .\setup-config.ps1
+   
+   # Windows CMD
+   setup-config.bat
+   
+   # Linux/Mac
+   chmod +x setup-config.sh
+   ./setup-config.sh
+   ```
+
+2. **编辑配置文件**
+   打开 `config.yaml` 文件，填入必要的配置：
+   - 数据库配置（Supabase）
+   - OpenAI API 配置
+   - 其他可选配置
+
+详细配置说明请参考 [config.yaml.example](config.yaml.example)
+
+## Docker 部署
+
+### 环境检查
+
+在开始之前，请先检查 Docker 环境：
+
+```bash
+# Windows PowerShell
+.\check-docker.ps1
+
+# Linux/Mac
+chmod +x check-docker.sh
+./check-docker.sh
+```
+
+如果遇到 Docker 未运行的问题，请参考 [DOCKER_TROUBLESHOOTING.md](DOCKER_TROUBLESHOOTING.md)
+
+### 快速开始
+
+1. **配置配置文件**
+
+   创建 `config.yaml` 文件（多种方法）：
+   
+   **方法一：使用脚本（推荐）**
+   ```powershell
+   # Windows PowerShell
+   .\setup-config.ps1
+   
+   # Windows CMD
+   setup-config.bat
+   
+   # Linux/Mac
+   chmod +x setup-config.sh
+   ./setup-config.sh
+   ```
+   
+   **方法二：手动创建**
+   ```powershell
+   # Windows PowerShell
+   Copy-Item config.yaml.example config.yaml
+   
+   # Windows CMD
+   copy config.yaml.example config.yaml
+   
+   # Linux/Mac
+   cp config.yaml.example config.yaml
+   ```
+   
+   然后编辑 `config.yaml` 文件，填入必要的配置：
+   - `database.supabase_url`: Supabase 数据库 URL
+   - `database.supabase_key`: Supabase 匿名密钥
+   - `database.supabase_secret`: Supabase 服务角色密钥
+   - `apis.openai.api_key`: OpenAI API 密钥（必需）
+   
+   **注意：** `jwt.secret` 已内置默认密钥，无需配置。如需自定义，可在 `config.yaml` 文件中设置。
+
+2. **构建 Docker 镜像**
+
+   **重要：** 构建前必须先编译 Go 程序！请使用构建脚本，它会自动完成编译和构建。
+
+   ```bash
+   # Windows
+   docker-build.bat
+   
+   # Linux/Mac
+   chmod +x docker-build.sh
+   ./docker-build.sh
+   ```
+   
+   **注意：** 
+   - 需要安装 Go 1.21+ 环境用于编译程序
+   - 不要直接运行 `docker build`，必须先编译 Go 程序
+   - 详细说明请参考 [BUILD.md](BUILD.md)
+
+3. **使用 Docker Compose 运行**
+   ```bash
+   # 启动服务
+   docker-compose up -d
+   
+   # 查看日志
+   docker-compose logs -f
+   
+   # 停止服务
+   docker-compose down
+   ```
+
+   或者使用 Docker Run：
+   ```bash
+   docker run -d \
+     --name ai-travel-planner \
+     -p 9090:9090 \
+     -v ./config.yaml:/app/config.yaml:ro \
+     --restart unless-stopped \
+     ai-travel-planner:latest
+   ```
+
+详细说明请参考 [DOCKER.md](DOCKER.md)
+
+### 上传到阿里云镜像仓库
+
+```bash
+# 使用上传脚本
+./docker-push-aliyun.sh latest cn-hangzhou my-namespace ai-travel-planner
+
+# 或手动上传
+docker login --username=你的用户名 registry.cn-hangzhou.aliyuncs.com
+docker tag ai-travel-planner:latest registry.cn-hangzhou.aliyuncs.com/my-namespace/ai-travel-planner:latest
+docker push registry.cn-hangzhou.aliyuncs.com/my-namespace/ai-travel-planner:latest
+```
+
+详细说明请参考 [ALIYUN_ACR_GUIDE.md](ALIYUN_ACR_GUIDE.md)
+
 ## 项目结构
 
 ```
@@ -32,7 +172,7 @@ AI-Travel-Planner/
 │   ├── models/            # 数据模型
 │   ├── services/          # 业务服务
 │   └── utils/             # 工具函数
-├── env.example            # 环境变量示例
+├── config.yaml.example    # 配置文件示例
 └── README.md              # 项目说明
 ```
 
@@ -49,12 +189,26 @@ cd AI-Travel-Planner
 go mod tidy
 ```
 
-### 2. 配置环境变量
+### 2. 配置配置文件
 
-复制 `env.example` 为 `.env` 并填入相应配置：
+复制 `config.yaml.example` 为 `config.yaml` 并填入相应配置：
 
 ```bash
-cp env.example .env
+# Windows PowerShell
+Copy-Item config.yaml.example config.yaml
+
+# Linux/Mac
+cp config.yaml.example config.yaml
+```
+
+或使用配置脚本：
+```bash
+# Windows
+setup-config.bat
+
+# Linux/Mac
+chmod +x setup-config.sh
+./setup-config.sh
 ```
 
 需要配置的API密钥：

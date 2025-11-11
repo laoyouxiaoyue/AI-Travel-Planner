@@ -2,6 +2,7 @@ package services
 
 import (
 	"ai-travel-planner/internal/models"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -252,6 +253,17 @@ func (db *MemoryDB) CreateExpense(expense *models.Expense) error {
 	return nil
 }
 
+func (db *MemoryDB) GetExpense(id string) (*models.Expense, error) {
+	db.mutex.RLock()
+	defer db.mutex.RUnlock()
+
+	expense, ok := db.expenses[id]
+	if !ok {
+		return nil, fmt.Errorf("expense not found")
+	}
+	return expense, nil
+}
+
 func (db *MemoryDB) GetExpenses(planID string) ([]*models.Expense, error) {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
@@ -265,7 +277,24 @@ func (db *MemoryDB) GetExpenses(planID string) ([]*models.Expense, error) {
 	return expenses, nil
 }
 
+func (db *MemoryDB) UpdateExpense(expense *models.Expense) error {
+	db.mutex.Lock()
+	defer db.mutex.Unlock()
 
+	if _, ok := db.expenses[expense.ID]; !ok {
+		return fmt.Errorf("expense not found")
+	}
+	db.expenses[expense.ID] = expense
+	return nil
+}
 
+func (db *MemoryDB) DeleteExpense(id string) error {
+	db.mutex.Lock()
+	defer db.mutex.Unlock()
 
-
+	if _, ok := db.expenses[id]; !ok {
+		return fmt.Errorf("expense not found")
+	}
+	delete(db.expenses, id)
+	return nil
+}

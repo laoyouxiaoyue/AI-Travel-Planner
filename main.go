@@ -6,38 +6,34 @@ import (
 	"ai-travel-planner/internal/middleware"
 	"ai-travel-planner/internal/services"
 	"log"
-	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	// 加载环境变量
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+	// 加载配置（从 YAML 文件）
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("加载配置失败: %v", err)
 	}
-
-	// 初始化配置
-	cfg := config.Load()
 
 	// 初始化服务
 	userService := services.NewUserService(cfg)
 	authService := services.NewAuthService(cfg)
 	travelService := services.NewTravelService(cfg)
 	voiceService := services.NewVoiceService(cfg)
-	mapService := services.NewMapService(cfg)
 	llmService := services.NewLLMService(cfg)
+	mapService := services.NewAmapService(cfg)
 
 	// 初始化处理器
 	userHandler := handlers.NewUserHandler(userService, authService)
 	travelHandler := handlers.NewTravelHandler(travelService, llmService)
 	voiceHandler := handlers.NewVoiceHandler(voiceService)
-	mapHandler := handlers.NewMapHandler(mapService)
 	settingsHandler := handlers.NewSettingsHandler(userService, llmService)
+	mapHandler := handlers.NewMapHandler(mapService)
 
 	// 设置Gin模式
-	if os.Getenv("GIN_MODE") == "release" {
+	if cfg.GetMode() == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -66,6 +62,9 @@ func main() {
 			auth.POST("/refresh", userHandler.RefreshToken)
 		}
 
+		// 公开的地图API Key接口（获取系统配置的API Key）
+		api.GET("/map/api-key", mapHandler.GetAmapApiKey)
+
 		// 需要认证的路由
 		protected := api.Group("/")
 		protected.Use(middleware.AuthRequired(authService))
@@ -87,6 +86,11 @@ func main() {
 				travel.GET("/plans/:id", travelHandler.GetTravelPlan)
 				travel.PUT("/plans/:id", travelHandler.UpdateTravelPlan)
 				travel.DELETE("/plans/:id", travelHandler.DeleteTravelPlan)
+				// 费用
+				travel.GET("/expenses", travelHandler.GetExpenses)
+				travel.POST("/expenses", travelHandler.CreateExpense)
+				travel.PUT("/expenses/:id", travelHandler.UpdateExpense)
+				travel.DELETE("/expenses/:id", travelHandler.DeleteExpense)
 			}
 
 			// 语音功能
@@ -94,16 +98,20 @@ func main() {
 			{
 				voice.POST("/recognize", voiceHandler.RecognizeSpeech)
 				voice.POST("/synthesize", voiceHandler.SynthesizeSpeech)
-                voice.POST("/understand", voiceHandler.UnderstandSpeech)
+				voice.POST("/understand", voiceHandler.UnderstandSpeech)
+				voice.POST("/understand-expense", voiceHandler.UnderstandExpense)
 			}
 
-			// 地图服务
+			// 地图功能（需要认证，使用用户配置的API Key或系统配置的API Key）
 			mapGroup := protected.Group("/map")
 			{
-				mapGroup.GET("/search", mapHandler.SearchPlaces)
-				mapGroup.GET("/route", mapHandler.GetRoute)
-				mapGroup.GET("/nearby", mapHandler.GetNearbyPlaces)
+				mapGroup.POST("/geocode", mapHandler.Geocode)           // 地理编码
+				mapGroup.POST("/regeocode", mapHandler.Regeocode)       // 逆地理编码
+				mapGroup.POST("/search-poi", mapHandler.SearchPOI)      // POI搜索
+				mapGroup.POST("/route", mapHandler.Route)               // 路线规划
+				mapGroup.POST("/distance", mapHandler.Distance)         // 距离计算
 			}
+
 		}
 	}
 
@@ -113,11 +121,7 @@ func main() {
 	})
 
 	// 启动服务器
-    port := os.Getenv("PORT")
-    if port == "" {
-        port = "9091"
-    }
-
+	port := cfg.GetPort()
 	log.Printf("Server starting on port %s", port)
 	if err := router.Run(":" + port); err != nil {
 		log.Fatal("Failed to start server:", err)

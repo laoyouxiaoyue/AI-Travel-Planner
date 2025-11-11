@@ -67,9 +67,24 @@ func (s *TravelService) CreateExpense(expense *models.Expense) error {
 	return s.db.CreateExpense(expense)
 }
 
+// GetExpense 获取单个费用
+func (s *TravelService) GetExpense(id string) (*models.Expense, error) {
+	return s.db.GetExpense(id)
+}
+
 // GetExpenses 获取旅行计划的费用记录
 func (s *TravelService) GetExpenses(planID string) ([]*models.Expense, error) {
 	return s.db.GetExpenses(planID)
+}
+
+// UpdateExpense 更新费用
+func (s *TravelService) UpdateExpense(expense *models.Expense) error {
+	return s.db.UpdateExpense(expense)
+}
+
+// DeleteExpense 删除费用
+func (s *TravelService) DeleteExpense(id string) error {
+	return s.db.DeleteExpense(id)
 }
 
 // GetExpenseSummary 获取费用汇总

@@ -98,6 +98,39 @@ func (s *LLMService) ParseVoiceToPlanFieldsWithKey(transcript, apiKey, baseURL, 
 	return obj, nil
 }
 
+// ParseVoiceToExpenseFieldsWithKey 使用LLM将语音文本解析为费用表单字段
+func (s *LLMService) ParseVoiceToExpenseFieldsWithKey(transcript, apiKey, baseURL, model string) (map[string]interface{}, error) {
+	prompt := fmt.Sprintf(`你是一个旅行记账助手。请从下面的中文用户语音文本中提取费用记录字段，并只以JSON返回：
+
+文本："%s"
+
+严格返回以下JSON字段（缺失请填空或合理推断，日期用YYYY-MM-DD）：
+{
+  "category": "字符串，类别：food/transport/accommodation/shopping/other",
+  "description": "字符串，简短描述",
+  "amount": 123.45,
+  "currency": "CNY",
+  "date": "YYYY-MM-DD"
+}
+注意：
+- 不要输出除JSON以外的任何文字；
+- 金额默认单位人民币，中文金额如“一百二”“两百左右”需换算为数字；`, transcript)
+
+	resp, err := s.callOpenAIWithKey(prompt, apiKey, baseURL, model)
+	if err != nil {
+		return nil, err
+	}
+	resp = strings.TrimSpace(resp)
+	if strings.HasPrefix(resp, "`") {
+		resp = strings.Trim(resp, "` ")
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(resp), &obj); err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response: %v. Raw: %s", err, resp)
+	}
+	return obj, nil
+}
+
 func NewLLMService(cfg *config.Config) *LLMService {
 	return &LLMService{
 		config: cfg,
@@ -243,24 +276,24 @@ func (s *LLMService) callOpenAIWithKey(prompt, apiKey, baseURL, model string) (s
 	// 优先使用传入的API Key，否则使用配置中的
 	actualApiKey := apiKey
 	if actualApiKey == "" {
-		actualApiKey = s.config.APIs.OpenAIAPIKey
+		actualApiKey = s.config.APIs.OpenAI.APIKey
 	}
 
 	// 检查OpenAI API密钥是否配置
 	if actualApiKey == "" {
-		return "", fmt.Errorf("OpenAI API key is not configured. Please set OPENAI_API_KEY environment variable or configure it in settings")
+		return "", fmt.Errorf("OpenAI API key is not configured. Please configure it in config.yaml or settings")
 	}
 
 	// 优先使用传入的BaseURL，否则使用配置中的
 	actualBaseURL := baseURL
 	if actualBaseURL == "" {
-		actualBaseURL = s.config.APIs.OpenAIBaseURL
+		actualBaseURL = s.config.APIs.OpenAI.BaseURL
 	}
 
 	// 模型名：优先使用传入的，否则配置中的
 	actualModel := model
 	if actualModel == "" {
-		actualModel = s.config.APIs.OpenAIModel
+		actualModel = s.config.APIs.OpenAI.Model
 		if actualModel == "" {
 			actualModel = "gpt-4o-mini"
 		}
@@ -295,7 +328,7 @@ func (s *LLMService) callOpenAIWithKey(prompt, apiKey, baseURL, model string) (s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+actualApiKey)
 
-	timeout := time.Duration(s.config.APIs.OpenAITimeoutSeconds)
+	timeout := time.Duration(s.config.APIs.OpenAI.TimeoutSeconds)
 	if timeout <= 0 {
 		timeout = 60
 	}
@@ -335,7 +368,7 @@ func (s *LLMService) TestApiKey(apiKey, baseURL string) error {
 	}
 
 	if baseURL == "" {
-		baseURL = s.config.APIs.OpenAIBaseURL
+		baseURL = s.config.APIs.OpenAI.BaseURL
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
@@ -343,7 +376,7 @@ func (s *LLMService) TestApiKey(apiKey, baseURL string) error {
 
 	// 发送一个简单的测试请求
 	requestBody := OpenAIRequest{
-		Model: s.config.APIs.OpenAIModel,
+		Model: s.config.APIs.OpenAI.Model,
 		Messages: []Message{
 			{
 				Role:    "user",

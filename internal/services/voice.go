@@ -75,7 +75,7 @@ func (s *VoiceService) callXunfeiAPI(audioData []byte, language string) (string,
 
 	// 设置请求头
 	req.Header.Set("Content-Type", "audio/pcm")
-	req.Header.Set("X-Appid", s.config.APIs.XunfeiAppID)
+	req.Header.Set("X-Appid", s.config.APIs.Xunfei.AppID)
 	req.Header.Set("X-CurTime", fmt.Sprintf("%d", time.Now().Unix()))
 	req.Header.Set("X-Param", s.buildXunfeiParam(language))
 	req.Header.Set("X-CheckSum", s.calculateXunfeiChecksum())
@@ -110,7 +110,7 @@ func (s *VoiceService) callXunfeiAPI(audioData []byte, language string) (string,
 func (s *VoiceService) buildXunfeiParam(language string) string {
 	param := map[string]interface{}{
 		"common": map[string]interface{}{
-			"app_id": s.config.APIs.XunfeiAppID,
+			"app_id": s.config.APIs.Xunfei.AppID,
 		},
 		"business": map[string]interface{}{
 			"language": language,

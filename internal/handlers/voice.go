@@ -56,6 +56,40 @@ func (h *VoiceHandler) UnderstandSpeech(c *gin.Context) {
     c.JSON(http.StatusOK, gin.H{"fields": fields})
 }
 
+// UnderstandExpense 使用LLM解析语音文本为费用字段
+func (h *VoiceHandler) UnderstandExpense(c *gin.Context) {
+    var req struct {
+        Transcript   string `json:"transcript" binding:"required"`
+        OpenAIApiKey string `json:"openai_api_key"`
+        BaseURL      string `json:"openai_base_url"`
+        Model        string `json:"openai_model"`
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    if req.OpenAIApiKey == "" {
+        req.OpenAIApiKey = c.GetHeader("X-OpenAI-API-Key")
+    }
+    if req.BaseURL == "" {
+        req.BaseURL = c.GetHeader("X-OpenAI-Base-URL")
+    }
+    if req.Model == "" {
+        req.Model = c.GetHeader("X-OpenAI-Model")
+    }
+
+    cfg := h.voiceService.Config()
+    llm := services.NewLLMService(cfg)
+
+    fields, err := llm.ParseVoiceToExpenseFieldsWithKey(req.Transcript, req.OpenAIApiKey, req.BaseURL, req.Model)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to understand expense speech", "details": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, gin.H{"fields": fields})
+}
+
 // RecognizeSpeech 语音识别
 func (h *VoiceHandler) RecognizeSpeech(c *gin.Context) {
 	var req models.VoiceInputRequest
